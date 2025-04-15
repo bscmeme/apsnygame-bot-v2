@@ -1,0 +1,4 @@
+.env
+rps_game.db
+__pycache__/
+*.pyc
