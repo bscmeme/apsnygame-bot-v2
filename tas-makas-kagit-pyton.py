@@ -326,8 +326,8 @@ def leaderboard():
     <h1>🏆 Lider Tablosu</h1>
     <table border='1'>
         <tr><th>Sıra</th><th>Kullanıcı</th><th>Galibiyet</th><th>BSC Bakiyesi</th></tr>
-        {% for i, leader in enumerate(leaders) %}
-        <tr><td>{{ i+1 }}</td><td>@{{ leader[0] }}</td><td>{{ leader[1] }}</td><td>{{ leader[2] }}</td></tr>
+        {% for leader in leaders %}
+        <tr><td>{{ loop.index }}</td><td>@{{ leader[0] }}</td><td>{{ leader[1] }}</td><td>{{ leader[2] }}</td></tr>
         {% endfor %}
     </table>
     <p>Güncellenme: {{ now }}</p>
