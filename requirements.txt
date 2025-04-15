@@ -1,4 +1,4 @@
-tweepy
+tweepy>4.10.0
 flask
 schedule
 python-dotenv

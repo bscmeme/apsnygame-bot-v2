@@ -11,16 +11,31 @@ import os
 # Flask app for leaderboard
 app = Flask(__name__)
 
+print("Script starting...")
+print("Loading environment variables...")
 # X API credentials (Replit environment variables)
 consumer_key = os.getenv("CONSUMER_KEY")
 consumer_secret = os.getenv("CONSUMER_SECRET")
 access_token = os.getenv("ACCESS_TOKEN")
 access_token_secret = os.getenv("ACCESS_TOKEN_SECRET")
+print(f"Consumer Key: {consumer_key[:5]}...")
+print(f"Access Token starts with: {access_token.split('-')[0]}...")
 
-# Tweepy setup
-auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
-auth.set_access_token(access_token, access_token_secret)
-api = tweepy.API(auth, wait_on_rate_limit=True)
+# Tweepy v2 Client setup
+client = tweepy.Client(
+    consumer_key=consumer_key,
+    consumer_secret=consumer_secret,
+    access_token=access_token,
+    access_token_secret=access_token_secret
+)
+
+# Test Tweepy connection
+print("Attempting to verify Tweepy credentials...")
+try:
+    user = client.get_me().data
+    print(f"Tweepy connected successfully! Bot username: {user.username}, User ID: {user.id}")
+except Exception as e:
+    print(f"Tweepy connection failed: {str(e)}")
 
 # SQLite setup
 conn = sqlite3.connect("rps_game.db", check_same_thread=False)
@@ -59,11 +74,12 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     );
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('last_mention_id', '0');
     """)
     conn.commit()
 
-# Pinned tweet ID (manually set after pinning)
-PINNED_TWEET_URL = "t.co/abc123"  # Replace with actual t.co link
+# Pinned tweet URL
+PINNED_TWEET_URL = "https://t.co/3gB7kLhXvY"  # Shortened form of https://x.com/apsnygame/status/1912182385262629239
 
 # Game logic
 CHOICES = {"taş": "rock", "kağıt": "paper", "makas": "scissors"}
@@ -80,16 +96,16 @@ def check_user_eligibility(user_id, username):
     
     if user and user[7] >= 2:  # no_shows >= 2
         if user[8] or (user[9] and user[9] > datetime.datetime.utcnow().isoformat()):
-            return False, "2 kere katılmadın, 7 gün ban. Detay: [t.co/abc123]. $BSC"
+            return False, f"2 kere katılmadın, 7 gün ban. Detay: [{PINNED_TWEET_URL}]. $BSC"
     
     try:
-        x_user = api.get_user(user_id=user_id)
+        x_user = client.get_user(id=user_id, user_fields=["created_at", "public_metrics"]).data
         created_at = datetime.datetime.strptime(x_user.created_at.strftime("%Y-%m-%d"), "%Y-%m-%d")
         age_days = (datetime.datetime.utcnow() - created_at).days
-        tweet_count = x_user.statuses_count
+        tweet_count = x_user.public_metrics["tweet_count"]
         
         if age_days < 30 or tweet_count < 10:
-            return False, f"@{username}, şartlar: hesap >1 ay, tweet >10. Detay: [t.co/abc123]. $BSC"
+            return False, f"@{username}, şartlar: hesap >1 ay, tweet >10. Detay: [{PINNED_TWEET_URL}]. $BSC"
         
         cursor.execute("SELECT games_today, last_game_date FROM users WHERE user_id=?", (user_id,))
         games_today, last_date = cursor.fetchone() or (0, None)
@@ -118,7 +134,7 @@ def detect_language(text, username):
     if re.search(r"[çğıöşüÇĞİÖŞÜ]", text):
         return "tr"
     try:
-        user = api.get_user(screen_name=username)
+        user = client.get_user(username=username, user_fields=["description"]).data
         if re.search(r"[çğıöşüÇĞİÖŞÜ]", user.description):
             return "tr"
     except:
@@ -140,14 +156,14 @@ def create_match(user1_id, user1_name, user2_id, user2_name):
             f"Oyun zamanı ! #taşkağıtmakas #oyun için meydan okundu! \n"
             f"@{user1_name} vs @{user2_name}!\n"
             f"@apsnygame + taş, kağıt ya da makas yaz ve 20:00 TRT’de zamanla.\n"
-            f"[t.co/abc123]. $BSC"
+            f"[{PINNED_TWEET_URL}]. $BSC"
         )
     elif lang1 == lang2 == "en":
         tweet = (
             f"Play #games time! @{user1_name} vs @{user2_name}!\n"
             f"#rockpaperscissors #game challenged!\n"
             f"Tag @apsnygame + rock, paper or scissors, time your reply tweet (UTC 17:00) and send.\n"
-            f"[t.co/abc123]. $BSC"
+            f"[{PINNED_TWEET_URL}]. $BSC"
         )
     else:
         tweet = (
@@ -156,11 +172,12 @@ def create_match(user1_id, user1_name, user2_id, user2_name):
             f"@apsnygame + taş, kağıt ya da makas yaz ve 20:00 TRT’de zamanla.\n"
             f"Play #games time! #rockpaperscissors #game challenged!\n"
             f"Tag @apsnygame + rock, paper or scissors, time your reply tweet (UTC 17:00) and send.\n"
-            f"[t.co/abc123]. $BSC"
+            f"[{PINNED_TWEET_URL}]. $BSC"
         )
     
     try:
-        api.update_status(tweet)
+        print(f"Posting match tweet: {tweet}")
+        client.create_tweet(text=tweet)
         cursor.execute(
             "INSERT INTO games (game_id, user1_id, user2_id, deadline, status) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -171,64 +188,87 @@ def create_match(user1_id, user1_name, user2_id, user2_name):
             (datetime.datetime.utcnow().strftime("%Y-%m-%d"), user1_id, user2_id)
         )
         conn.commit()
+        print(f"Match created: {game_id}")
     except Exception as e:
-        print(f"Match tweet error: {e}")
+        print(f"Match tweet error: {str(e)}")
 
 def process_mentions():
     """Process mentions for participation and invites."""
-    last_mention_id = cursor.execute("SELECT value FROM settings WHERE key='last_mention_id'").fetchone()
-    last_mention_id = last_mention_id[0] if last_mention_id else None
-    
-    mentions = api.mentions_timeline(since_id=last_mention_id)
-    
-    for mention in reversed(mentions):
-        user_id = mention.user.id_str
-        username = mention.user.screen_name
-        text = mention.text.lower()
+    try:
+        last_mention_id = cursor.execute("SELECT value FROM settings WHERE key='last_mention_id'").fetchone()
+        last_mention_id = last_mention_id[0] if last_mention_id else None
+        print(f"Checking mentions since ID: {last_mention_id}")
+        if last_mention_id is None:
+            print("No last_mention_id found, checking all mentions")
         
-        eligible, error = check_user_eligibility(user_id, username)
-        if not eligible:
-            api.update_status(f"@{username} {error}", in_reply_to_status_id=mention.id_str)
-            continue
+        try:
+            mentions_response = client.get_users_mentions(id=user.id, since_id=last_mention_id, user_fields=["username"], expansions=["author_id"])
+            mentions = mentions_response.data if mentions_response.data else []
+            print(f"Found {len(mentions)} new mentions")
+        except Exception as e:
+            print(f"Error fetching mentions: {str(e)}")
+            mentions = []
         
-        lang = detect_language(text, username)
-        cursor.execute(
-            "UPDATE users SET language=? WHERE user_id=?",
-            (lang, user_id)
-        )
+        if not mentions:
+            print("No new mentions found.")
+            return
         
-        if "oyun" in text or "game" in text:
-            invited = [u.screen_name for u in mention.entities["user_mentions"] if u["screen_name"] != "apsnygame"]
-            if invited:
-                invited_id = api.get_user(screen_name=invited[0]).id_str
-                invited_eligible, invited_error = check_user_eligibility(invited_id, invited[0])
-                if invited_eligible:
-                    create_match(user_id, username, invited_id, invited[0])
+        for mention in mentions:
+            user_id = str(mention.author_id)
+            username = mention.username
+            text = mention.text.lower()
+            print(f"Processing mention from @{username}: {text}")
+            
+            eligible, error = check_user_eligibility(user_id, username)
+            if not eligible:
+                print(f"User @{username} not eligible: {error}")
+                try:
+                    client.create_tweet(text=f"@{username} {error}", in_reply_to_tweet_id=mention.id)
+                except Exception as e:
+                    print(f"Error replying to @{username}: {str(e)}")
+                continue
+            
+            lang = detect_language(text, username)
+            cursor.execute("UPDATE users SET language=? WHERE user_id=?", (lang, user_id))
+            print(f"Set language for @{username}: {lang}")
+            
+            if "oyun" in text or "game" in text:
+                print(f"Game request detected from @{username}")
+                invited = [u.username for u in mention.entities.get("mentions", []) if u.username != "apsnygame"]
+                if invited:
+                    invited_user = client.get_user(username=invited[0]).data
+                    invited_id = str(invited_user.id)
+                    invited_eligible, invited_error = check_user_eligibility(invited_id, invited[0])
+                    if invited_eligible:
+                        print(f"Creating match: @{username} vs @{invited[0]}")
+                        create_match(user_id, username, invited_id, invited[0])
+                    else:
+                        print(f"Invited user @{invited[0]} not eligible: {invited_error}")
+                        try:
+                            client.create_tweet(text=f"@{invited[0]} {invited_error}", in_reply_to_tweet_id=mention.id)
+                        except Exception as e:
+                            print(f"Error replying to @{invited[0]}: {str(e)}")
                 else:
-                    api.update_status(f"@{invited[0]} {invited_error}", in_reply_to_status_id=mention.id_str)
-            else:
-                cursor.execute(
-                    "UPDATE users SET status='waiting' WHERE user_id=?",
-                    (user_id,)
-                )
-                # Match waiting users
-                cursor.execute(
-                    "SELECT user_id, username FROM users WHERE status='waiting' AND user_id!=? LIMIT 1",
-                    (user_id,)
-                )
-                opponent = cursor.fetchone()
-                if opponent:
-                    create_match(user_id, username, opponent[0], opponent[1])
+                    print(f"@{username} waiting for opponent")
+                    cursor.execute("UPDATE users SET status='waiting' WHERE user_id=?", (user_id,))
                     cursor.execute(
-                        "UPDATE users SET status='' WHERE user_id IN (?, ?)",
-                        (user_id, opponent[0])
+                        "SELECT user_id, username FROM users WHERE status='waiting' AND user_id!=? LIMIT 1",
+                        (user_id,)
                     )
-        
-        cursor.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('last_mention_id', ?)",
-            (mention.id_str,)
-        )
-        conn.commit()
+                    opponent = cursor.fetchone()
+                    if opponent:
+                        print(f"Matched @{username} with @{opponent[1]}")
+                        create_match(user_id, username, opponent[0], opponent[1])
+                        cursor.execute("UPDATE users SET status='' WHERE user_id IN (?, ?)", (user_id, opponent[0]))
+            
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('last_mention_id', ?)",
+                (mention.id,)
+            )
+            conn.commit()
+            print(f"Updated last_mention_id to {mention.id}")
+    except Exception as e:
+        print(f"Error in process_mentions: {str(e)}")
 
 def check_games():
     """Check games for choices and results."""
@@ -243,17 +283,23 @@ def check_games():
         
         start_time = datetime.datetime.fromisoformat(deadline)
         end_time = start_time + datetime.timedelta(seconds=1)
-        mentions = api.mentions_timeline()
+        try:
+            mentions_response = client.get_users_mentions(id=user.id)
+            mentions = mentions_response.data if mentions_response.data else []
+        except Exception as e:
+            print(f"Error fetching mentions in check_games: {str(e)}")
+            continue
         
         user1_choice = None
         user2_choice = None
         
         for mention in mentions:
-            if mention.created_at.isoformat() >= start_time.isoformat() and mention.created_at.isoformat() <= end_time.isoformat():
+            mention_time = mention.created_at
+            if mention_time.isoformat() >= start_time.isoformat() and mention_time.isoformat() <= end_time.isoformat():
                 text = mention.text.lower()
-                if mention.user.id_str == user1_id and any(c in text for c in ["taş", "kağıt", "makas", "rock", "paper", "scissors"]):
+                if str(mention.author_id) == user1_id and any(c in text for c in ["taş", "kağıt", "makas", "rock", "paper", "scissors"]):
                     user1_choice = next((c for c in ["taş", "kağıt", "makas", "rock", "paper", "scissors"] if c in text), None)
-                if mention.user.id_str == user2_id and any(c in text for c in ["taş", "kağıt", "makas", "rock", "paper", "scissors"]):
+                if str(mention.author_id) == user2_id and any(c in text for c in ["taş", "kağıt", "makas", "rock", "paper", "scissors"]):
                     user2_choice = next((c for c in ["taş", "kağıt", "makas", "rock", "paper", "scissors"] if c in text), None)
         
         if not user1_choice and not user2_choice:
@@ -309,7 +355,11 @@ def check_games():
             (user1_choice, user2_choice, winner_id, game_id)
         )
         cursor.execute("UPDATE users SET games_played=games_played+1 WHERE user_id IN (?, ?)", (user1_id, user2_id))
-        api.update_status(tweet)
+        try:
+            print(f"Posting game result: {tweet}")
+            client.create_tweet(text=tweet)
+        except Exception as e:
+            print(f"Game result tweet error: {str(e)}")
         conn.commit()
 
 def reset_daily_limits():
@@ -363,9 +413,11 @@ def run_schedule():
 
 # Main bot loop
 def run_bot():
+    print("Starting bot loop...")
     Thread(target=run_schedule).start()
     while True:
         try:
+            print("Running process_mentions...")
             process_mentions()
             time.sleep(60)
         except Exception as e:
@@ -373,6 +425,13 @@ def run_bot():
             time.sleep(300)
 
 if __name__ == "__main__":
+    print("Main block starting...")
+    print("Initializing database...")
     init_db()  # Veritabanını başlat
-    Thread(target=run_bot).start()
-    app.run(host="0.0.0.0", port=8080)
+    print("Starting bot thread...")
+    bot_thread = Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    print("Starting Flask app...")
+    app.run(host="0.0.0.0", port=8080, use_reloader=False)
+
