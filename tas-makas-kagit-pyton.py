@@ -26,36 +26,41 @@ api = tweepy.API(auth, wait_on_rate_limit=True)
 conn = sqlite3.connect("rps_game.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# Create tables
-cursor.executescript("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    username TEXT,
-    language TEXT,
-    created_at TEXT,
-    tweet_count INTEGER,
-    games_today INTEGER,
-    last_game_date TEXT,
-    no_shows INTEGER DEFAULT 0,
-    banned INTEGER DEFAULT 0,
-    ban_until TEXT,
-    last_invited TEXT,
-    games_played INTEGER DEFAULT 0,
-    wins INTEGER DEFAULT 0,
-    bsc_balance REAL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS games (
-    game_id TEXT PRIMARY KEY,
-    user1_id TEXT,
-    user2_id TEXT,
-    user1_choice TEXT,
-    user2_choice TEXT,
-    deadline TEXT,
-    status TEXT,
-    winner_id TEXT
-);
-""")
-conn.commit()
+# Veritabanını başlat
+def init_db():
+    cursor.executescript("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        username TEXT,
+        language TEXT,
+        created_at TEXT,
+        tweet_count INTEGER,
+        games_today INTEGER,
+        last_game_date TEXT,
+        no_shows INTEGER DEFAULT 0,
+        banned INTEGER DEFAULT 0,
+        ban_until TEXT,
+        last_invited TEXT,
+        games_played INTEGER DEFAULT 0,
+        wins INTEGER DEFAULT 0,
+        bsc_balance REAL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS games (
+        game_id TEXT PRIMARY KEY,
+        user1_id TEXT,
+        user2_id TEXT,
+        user1_choice TEXT,
+        user2_choice TEXT,
+        deadline TEXT,
+        status TEXT,
+        winner_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+    """)
+    conn.commit()
 
 # Pinned tweet ID (manually set after pinning)
 PINNED_TWEET_URL = "t.co/abc123"  # Replace with actual t.co link
@@ -368,5 +373,6 @@ def run_bot():
             time.sleep(300)
 
 if __name__ == "__main__":
+    init_db()  # Veritabanını başlat
     Thread(target=run_bot).start()
     app.run(host="0.0.0.0", port=8080)
